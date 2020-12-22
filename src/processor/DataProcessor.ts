@@ -227,37 +227,16 @@ export class DataProcessor implements LinkedDataAPI, DeltaProcessor {
         this._dispatch = value;
     }
 
-    public async execActionByIRI(subject: NamedNode, dataTuple: DataTuple): Promise<LinkedActionResponse> {
-
-        const [graph, blobs = []] = dataTuple;
-
-        if (this.store.quadsFor(subject).length === 0) {
-            await this.getEntity(subject);
-        }
-
-        const target = this.store.getResourceProperty(subject, schema.target);
-
-        if (!target || target.termType === "Collection" || target.termType === TermType.Literal) {
-            throw new ProcessorError(MSG_INCORRECT_TARGET);
-        }
-
-        const urls = this.store.getResourceProperty(target as SomeNode, schema.url);
-        const url = Array.isArray(urls) ? urls[0] : urls;
-        if (!url) {
-            throw new ProcessorError(MSG_URL_UNDEFINED);
-        }
-        if (url.termType !== TermType.NamedNode) {
-            throw new ProcessorError(MSG_URL_UNRESOLVABLE);
-        }
-        const targetMethod = this.store.getResourceProperty(target as SomeNode, schema.httpMethod);
-        const method = typeof targetMethod !== "undefined" ? targetMethod.value : "GET";
+    public async fetchAction(method: string, url: string, referrer: string, dataTuple: DataTuple): Promise<LinkedActionResponse> {
         const opts = this.requestInitGenerator.generate(method, this.acceptForHost(url));
 
         if (opts.headers instanceof Headers) {
-            opts.headers.set("Request-Referrer", subject.value);
+            opts.headers.set("Request-Referrer", referrer);
         } else if (opts.headers && !Array.isArray(opts.headers)) {
-            opts.headers["Request-Referrer"] = subject.value;
+            opts.headers["Request-Referrer"] = referrer;
         }
+
+        const [graph, blobs = []] = dataTuple;
 
         if (!SAFE_METHODS.includes(method) && graph && graph !== null && graph.length > 0) {
             if (opts.headers instanceof Headers) {
@@ -278,7 +257,7 @@ export class DataProcessor implements LinkedDataAPI, DeltaProcessor {
             opts.body = data;
         }
 
-        const resp = await this.fetch(url.value, opts).then(this.processExecAction);
+        const resp = await this.fetch(url, opts).then(this.processExecAction);
 
         if (resp.status > BAD_REQUEST) {
             // TODO: process responses with a correct content-type.
@@ -295,6 +274,31 @@ export class DataProcessor implements LinkedDataAPI, DeltaProcessor {
             data: statements,
             iri,
         };
+    }
+
+    public async execActionByIRI(subject: NamedNode, dataTuple: DataTuple): Promise<LinkedActionResponse> {
+        if (this.store.quadsFor(subject).length === 0) {
+            await this.getEntity(subject);
+        }
+
+        const target = this.store.getResourceProperty(subject, schema.target);
+
+        if (!target || target.termType === "Collection" || target.termType === TermType.Literal) {
+            throw new ProcessorError(MSG_INCORRECT_TARGET);
+        }
+
+        const urls = this.store.getResourceProperty(target as SomeNode, schema.url);
+        const url = Array.isArray(urls) ? urls[0] : urls;
+        if (!url) {
+            throw new ProcessorError(MSG_URL_UNDEFINED);
+        }
+        if (url.termType !== TermType.NamedNode) {
+            throw new ProcessorError(MSG_URL_UNRESOLVABLE);
+        }
+        const targetMethod = this.store.getResourceProperty(target as SomeNode, schema.httpMethod);
+        const method = typeof targetMethod !== "undefined" ? targetMethod.value : "GET";
+
+        return this.fetchAction(method, url.value, subject.value, dataTuple)
     }
 
     public flush(): Quad[] {
